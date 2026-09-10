@@ -21,6 +21,7 @@ import feedparser
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv, dotenv_values
+from googlenewsdecoder import gnewsdecoder
 
 ENV_PATH = os.getenv("ENV_FILE", ".env")
 
@@ -394,9 +395,34 @@ def search_google_news(query: str, limit: int | None = None) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Google-News-Redirect-Links auf die echte Verlags-URL auflösen
+# ---------------------------------------------------------------------------
+def resolve_real_url(link: str) -> str:
+    """news.google.com/rss/articles/...-Links zeigen nicht direkt auf den
+    Artikel, sondern auf eine von Google verschlüsselte Zwischen-ID. Beim
+    direkten Abruf landet man (v. a. aus der EU) auf Googles Cookie-Consent-
+    Seite statt beim echten Artikel. gnewsdecoder bildet den internen Aufruf
+    nach, den news.google.com selbst macht, um die echte Ziel-URL aufzulösen.
+    Nicht-Google-Links werden unverändert zurückgegeben; schlägt die
+    Auflösung fehl, ebenfalls (extract_article_text bekommt dann bestenfalls
+    die Google-Zwischenseite - siehe Log-Warnung dort)."""
+    if "news.google.com" not in link:
+        return link
+    try:
+        result = gnewsdecoder(link)
+        if result and result.get("status") and result.get("decoded_url"):
+            return result["decoded_url"]
+        logger.warning("Google-News-Link konnte nicht aufgelöst werden (kein decoded_url): %s", link)
+    except Exception as exc:
+        logger.warning("Google-News-Link konnte nicht aufgelöst werden (%s): %s", link, exc)
+    return link
+
+
+# ---------------------------------------------------------------------------
 # Volltext der Originalseite holen (best effort)
 # ---------------------------------------------------------------------------
 def extract_article_text(url: str, max_chars: int = 10000) -> str:
+    url = resolve_real_url(url)
     try:
         resp = requests.get(
             url, timeout=10, headers={"User-Agent": "Mozilla/5.0"}, allow_redirects=True
