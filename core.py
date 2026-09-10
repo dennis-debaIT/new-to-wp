@@ -421,7 +421,7 @@ def resolve_real_url(link: str) -> str:
 # ---------------------------------------------------------------------------
 # Volltext der Originalseite holen (best effort)
 # ---------------------------------------------------------------------------
-def extract_article_text(url: str, max_chars: int = 10000) -> str:
+def extract_article_text(url: str, max_chars: int = 14000) -> str:
     url = resolve_real_url(url)
     try:
         resp = requests.get(
@@ -431,8 +431,22 @@ def extract_article_text(url: str, max_chars: int = 10000) -> str:
         soup = BeautifulSoup(resp.text, "html.parser")
         for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form"]):
             tag.decompose()
-        paragraphs = [p.get_text(" ", strip=True) for p in soup.find_all("p")]
-        text = "\n".join(p for p in paragraphs if len(p) > 40)
+        # Wichtig: nicht nur <p>-Absätze einsammeln, sondern auch
+        # <li>-Listenpunkte (z. B. CVE-Listen, Aufzählungen betroffener
+        # Produkte/Versionen) und <blockquote>-Zitate - sonst gehen genau die
+        # Details verloren, die in Sicherheitsmeldungen oft als Liste stehen.
+        # <li>-Punkte werden mit "- " markiert, damit die KI sie später als
+        # zusammengehörige Einzel-Fakten erkennt statt als Fließtext.
+        collected = []
+        for el in soup.find_all(["p", "li", "blockquote"]):
+            txt = el.get_text(" ", strip=True)
+            if not txt:
+                continue
+            if el.name == "li":
+                collected.append(f"- {txt}")
+            elif len(txt) > 40:
+                collected.append(txt)
+        text = "\n".join(collected)
         text = text[:max_chars]
         if len(text) < 300:
             # Verdächtig wenig Text (z. B. Paywall-/Consent-Seite statt echtem
@@ -512,6 +526,13 @@ Anforderungen:
 - Eigener, prägnanter Titel (max. 70 Zeichen)
 - Angestrebter Umfang: {length_instruction}, aber alle Fakten aus dem Rohtext
   müssen enthalten sein - im Zweifel Vorrang vor der Wortzahl
+- WICHTIG: Enthält der Rohtext eine Liste einzelner technischer Fakten
+  (z. B. mehrere CVE-Nummern mit CVSS-Wert und betroffenen Produkten/
+  Versionen, mehrere Änderungen, mehrere betroffene Modelle o. ä.), gib
+  JEDEN einzelnen Punkt vollständig wieder - fasse eine Liste NIEMALS zu
+  einer bloßen Gesamtzahl zusammen (z. B. nicht nur "22 Schwachstellen",
+  sondern jede einzelne mit ihren Detailangaben). Nutze dafür im "content"
+  eine <ul><li>-Liste - das zählt nicht gegen den angestrebten Umfang oben.
 - Letzter Satz: Quellenhinweis ("Quelle: {source_name}")
 - Kurze Meta-Description für SEO (max. 155 Zeichen)
 - URL-Slug in Kleinbuchstaben, mit Bindestrichen statt Leerzeichen, ohne
@@ -520,7 +541,9 @@ Anforderungen:
 - 1-3 passende Kategorien
 - 3-6 passende Tags
 - Antworte NUR als JSON-Objekt mit genau diesen Feldern:
-  "title" (String), "content" (HTML mit <p>-Tags, sonst keine Formatierung),
+  "title" (String), "content" (HTML - <p>-Absätze für Fließtext; zusätzlich
+  <ul>/<li> erlaubt und erwünscht, wenn der Rohtext eine Liste einzelner
+  Fakten enthält, siehe oben; sonst keine weitere Formatierung),
   "excerpt" (String), "slug" (String), "image_alt" (String),
   "categories" (Liste von Strings), "tags" (Liste von Strings)."""
 
