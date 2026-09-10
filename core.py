@@ -290,12 +290,30 @@ def test_connections() -> dict[str, str]:
 
     if cfg.GROQ_API_KEY:
         try:
-            r = requests.get(
-                "https://api.groq.com/openai/v1/models",
+            # Bewusst ein echter Mini-Chat-Aufruf mit dem KONFIGURIERTEN Modell,
+            # nicht nur die Modell-Liste - so faellt ein ungueltiges/veraltetes
+            # Modell (HTTP 404) hier schon auf, statt erst beim echten Posten.
+            r = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {cfg.GROQ_API_KEY}"},
-                timeout=10,
+                json={
+                    "model": cfg.GROQ_MODEL,
+                    "messages": [{"role": "user", "content": "Antworte nur mit OK."}],
+                    "max_tokens": 5,
+                },
+                timeout=15,
             )
-            results["Groq"] = "OK" if r.status_code == 200 else f"Fehler (HTTP {r.status_code})"
+            if r.status_code == 200:
+                results["Groq"] = f"OK (Modell „{cfg.GROQ_MODEL}“ funktioniert)"
+            elif r.status_code == 404:
+                results["Groq"] = (
+                    f"Fehler: Modell „{cfg.GROQ_MODEL}“ wurde bei Groq nicht gefunden. "
+                    "Bitte oben ein anderes Modell aus dem Dropdown wählen und erneut speichern."
+                )
+            elif r.status_code == 401:
+                results["Groq"] = "Fehler: API-Key ungültig (HTTP 401)"
+            else:
+                results["Groq"] = f"Fehler (HTTP {r.status_code}): {r.text[:200]}"
         except Exception as exc:
             results["Groq"] = f"Fehler: {exc}"
     else:
@@ -378,7 +396,7 @@ def search_google_news(query: str, limit: int | None = None) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Volltext der Originalseite holen (best effort)
 # ---------------------------------------------------------------------------
-def extract_article_text(url: str, max_chars: int = 6000) -> str:
+def extract_article_text(url: str, max_chars: int = 10000) -> str:
     try:
         resp = requests.get(
             url, timeout=10, headers={"User-Agent": "Mozilla/5.0"}, allow_redirects=True
@@ -389,7 +407,17 @@ def extract_article_text(url: str, max_chars: int = 6000) -> str:
             tag.decompose()
         paragraphs = [p.get_text(" ", strip=True) for p in soup.find_all("p")]
         text = "\n".join(p for p in paragraphs if len(p) > 40)
-        return text[:max_chars]
+        text = text[:max_chars]
+        if len(text) < 300:
+            # Verdächtig wenig Text (z. B. Paywall-/Consent-Seite statt echtem
+            # Artikel) - lieber im Log sichtbar machen, statt still weiterzumachen.
+            logger.warning(
+                "Nur %d Zeichen Volltext extrahiert (%s) - evtl. Paywall/Consent-Seite statt Artikeltext.",
+                len(text), url,
+            )
+        else:
+            logger.info("Volltext extrahiert: %d Zeichen (%s)", len(text), url)
+        return text
     except Exception as exc:
         logger.warning("Volltext konnte nicht geladen werden (%s): %s", url, exc)
         return ""
@@ -431,7 +459,13 @@ def rewrite_with_groq(
 
     prompt = f"""Du bist Redakteur für einen deutschsprachigen News-Blog.
 Schreibe auf Basis der folgenden Rohinformationen einen eigenständigen,
-komplett neu formulierten Artikel. Übernimm keine Sätze wörtlich aus der Quelle.
+komplett neu formulierten Artikel. WICHTIG: "Neu formuliert" bezieht sich auf
+Satzbau und Wortwahl, NICHT auf den Inhalt - alle konkreten Fakten aus dem
+Rohtext (Produkt-/Modellnamen, Versionsnummern, CVE-/Kennungen, Zahlen,
+Daten, betroffene Systeme, technische Details, Zitate von Sprechern) müssen
+vollständig erhalten bleiben. Lieber einen etwas längeren Artikel schreiben,
+als Fakten aus Platzgründen wegzulassen. Nur die konkreten Satzformulierungen
+dürfen nicht 1:1 aus der Quelle übernommen werden.
 
 Ursprünglicher Titel: {title}
 Quelle: {source_name}
@@ -439,7 +473,9 @@ Rohtext / Zusammenfassung:
 {source_text}
 
 Stil: {tone_instruction}.
-Umfang: {length_instruction}.
+Angestrebter Umfang: {length_instruction} - Details aus dem Rohtext haben
+aber Vorrang vor dieser Richtgröße; fasse nichts Wichtiges weg, um kürzer zu
+bleiben.
 
 Bereits vorhandene Kategorien auf dem Blog (wenn thematisch passend bitte
 bevorzugt wiederverwenden, statt neue zu erfinden): {", ".join(existing_categories) or "(keine bekannt)"}
@@ -448,7 +484,8 @@ wiederverwenden): {", ".join(existing_tags) or "(keine bekannt)"}
 
 Anforderungen:
 - Eigener, prägnanter Titel (max. 70 Zeichen)
-- {length_instruction}
+- Angestrebter Umfang: {length_instruction}, aber alle Fakten aus dem Rohtext
+  müssen enthalten sein - im Zweifel Vorrang vor der Wortzahl
 - Letzter Satz: Quellenhinweis ("Quelle: {source_name}")
 - Kurze Meta-Description für SEO (max. 155 Zeichen)
 - URL-Slug in Kleinbuchstaben, mit Bindestrichen statt Leerzeichen, ohne
@@ -475,6 +512,14 @@ Anforderungen:
         },
         timeout=60,
     )
+    if resp.status_code == 404:
+        raise RuntimeError(
+            f"Groq-Modell „{cfg.GROQ_MODEL}“ wurde nicht gefunden (HTTP 404). "
+            "Bitte in den Einstellungen unter „KI (Groq)“ ein anderes Modell aus dem "
+            "Dropdown wählen, speichern und mit „Verbindungen testen“ prüfen."
+        )
+    if resp.status_code == 401:
+        raise RuntimeError("Groq-API-Key ungültig (HTTP 401). Bitte in den Einstellungen prüfen.")
     resp.raise_for_status()
     content_str = resp.json()["choices"][0]["message"]["content"]
     parsed = json.loads(content_str)
