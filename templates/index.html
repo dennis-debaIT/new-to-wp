@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>News → WordPress</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <input type="checkbox" id="settings-toggle" class="modal-toggle" {% if settings_open %}checked{% endif %}>
+    <div class="modal-overlay">
+        <div class="modal">
+            <label for="settings-toggle" class="modal-close" title="Schließen">✕</label>
+            <h2>Einstellungen</h2>
+            <p class="subtitle">API-Keys, Zugangsdaten und Optionen. Passwörter/Keys werden nie angezeigt — leer lassen, um sie unverändert zu lassen.</p>
+
+            {% if settings_success %}<div class="alert alert-success">{{ settings_success }}</div>{% endif %}
+            {% if settings_error %}<div class="alert alert-error">{{ settings_error }}</div>{% endif %}
+
+            {% if test_results %}
+            <div class="alert alert-info">
+                <strong>Verbindungstest:</strong>
+                <ul class="test-results">
+                    {% for service, result in test_results.items() %}
+                    <li><strong>{{ service }}:</strong> {{ result }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            <form action="/settings" method="post" class="settings-form">
+                {% for group in settings_groups %}
+                <fieldset>
+                    <legend>{{ group.name }}</legend>
+                    {% for f in group.fields %}
+                    <label class="settings-field">
+                        <span>{{ f.label }}</span>
+                        {% if f.type == 'select' %}
+                        <select name="{{ f.key }}">
+                            {% for opt in f.options %}
+                            <option value="{{ opt }}" {% if opt == f.value %}selected{% endif %}>{{ opt }}</option>
+                            {% endfor %}
+                        </select>
+                        {% elif f.type == 'password' %}
+                        <input type="password" name="{{ f.key }}" autocomplete="new-password"
+                               placeholder="{{ '•••••••• (gesetzt – leer lassen, um nicht zu ändern)' if f.is_set else 'noch nicht gesetzt' }}">
+                        {% elif f.type == 'number' %}
+                        <input type="number" name="{{ f.key }}" value="{{ f.value }}">
+                        {% else %}
+                        <input type="text" name="{{ f.key }}" value="{{ f.value }}">
+                        {% endif %}
+                        {% if f.help %}<small class="settings-help">{{ f.help }}</small>{% endif %}
+                    </label>
+                    {% endfor %}
+                </fieldset>
+                {% endfor %}
+                <div class="settings-actions">
+                    <button type="submit">Einstellungen speichern</button>
+                </div>
+            </form>
+
+            <form action="/settings/test" method="post" class="test-form">
+                <button type="submit" class="btn-secondary">🔌 Verbindungen testen</button>
+                <small class="settings-help">Testet die aktuell gespeicherten Zugangsdaten (bitte vorher speichern).</small>
+            </form>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="page-header">
+            <div>
+                <h1>News → WordPress</h1>
+                <p class="subtitle">Suchbegriff eingeben, passenden Artikel wählen, Kategorien/Tags/Ton/Länge festlegen, per KI umschreiben und veröffentlichen lassen.</p>
+            </div>
+            <label for="settings-toggle" class="btn-settings" title="Einstellungen öffnen">⚙️ Einstellungen</label>
+        </div>
+
+        <form action="/search" method="post" class="search-form">
+            <input type="text" name="query" placeholder="z. B. Smart Home" value="{{ query or '' }}" required>
+            <button type="submit">Suchen</button>
+        </form>
+
+        {% if error %}
+        <div class="alert alert-error">{{ error }}</div>
+        {% endif %}
+
+        {% if success %}
+        <div class="alert alert-success">
+            <strong>Fertig!</strong> Beitrag „{{ success.title }}" wurde als
+            <strong>{{ 'Entwurf' if success.status == 'draft' else 'veröffentlicht' }}</strong> gespeichert
+            (WordPress-ID {{ success.wp_id }}).
+            {% if success.edit_link %}
+                <a href="{{ success.edit_link }}" target="_blank">Beitrag ansehen</a>
+            {% endif %}
+            {% if success.image_credit %}
+                <br><small>Bild: Foto von <a href="{{ success.image_credit.photographer_url }}" target="_blank">{{ success.image_credit.photographer }}</a> (Pexels)</small>
+            {% endif %}
+            <ul class="success-details">
+                {% if success.excerpt %}<li><strong>Meta-Description:</strong> {{ success.excerpt }}</li>{% endif %}
+                {% if success.slug %}<li><strong>Slug:</strong> {{ success.slug }}</li>{% endif %}
+                {% if success.categories %}<li><strong>Kategorien:</strong> {{ success.categories | join(', ') }}</li>{% endif %}
+                {% if success.tags %}<li><strong>Tags:</strong> {{ success.tags | join(', ') }}</li>{% endif %}
+                {% if success.ai_categories_used or success.ai_tags_used %}
+                <li><strong>Von der KI zusätzlich vorgeschlagen:</strong>
+                    {{ (success.ai_categories_used + success.ai_tags_used) | join(', ') }}
+                </li>
+                {% endif %}
+                <li><strong>Ton/Länge:</strong> {{ success.tone }} / {{ success.length }}</li>
+            </ul>
+        </div>
+        {% endif %}
+
+        {% if results is not none %}
+            {% if results|length == 0 %}
+                <p>Keine Ergebnisse gefunden.</p>
+            {% else %}
+            <form action="/publish" method="post" class="results-form">
+                <table class="results-table">
+                    <thead>
+                        <tr>
+                            <th></th>
+                            <th>Titel</th>
+                            <th>Quelle</th>
+                            <th>Datum</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for r in results %}
+                        <tr class="{{ 'already-posted' if r.already_posted else '' }}">
+                            <td><input type="radio" name="article_index" value="{{ loop.index0 }}" {% if loop.first %}checked{% endif %}></td>
+                            <td>
+                                <a href="{{ r.link }}" target="_blank">{{ r.title }}</a>
+                                {% if r.already_posted %}
+                                <span class="badge-posted" title="Bereits am {{ r.posted_at }} gepostet">Bereits gepostet</span>
+                                {% endif %}
+                                <div class="summary">{{ r.summary }}</div>
+                            </td>
+                            <td>{{ r.source }}</td>
+                            <td>{{ r.published }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+
+                <fieldset class="taxonomy-select">
+                    <legend>Kategorien</legend>
+                    {% if categories %}
+                    <div class="checkbox-grid">
+                        {% for c in categories %}
+                        <label><input type="checkbox" name="category_ids" value="{{ c.id }}"> {{ c.name }}</label>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p class="hint">Keine bestehenden Kategorien gefunden (oder WordPress nicht erreichbar).</p>
+                    {% endif %}
+                    <input type="text" name="new_categories" placeholder="Neue Kategorie(n) anlegen, Komma-getrennt">
+                    <p class="hint">Die KI schlägt beim Posten zusätzlich automatisch 1-3 passende Kategorien vor.</p>
+                </fieldset>
+
+                <fieldset class="taxonomy-select">
+                    <legend>Tags</legend>
+                    {% if tags %}
+                    <div class="checkbox-grid">
+                        {% for t in tags %}
+                        <label><input type="checkbox" name="tag_ids" value="{{ t.id }}"> {{ t.name }}</label>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p class="hint">Keine bestehenden Tags gefunden (oder WordPress nicht erreichbar).</p>
+                    {% endif %}
+                    <input type="text" name="new_tags" placeholder="Neue Tag(s) anlegen, Komma-getrennt">
+                    <p class="hint">Die KI schlägt beim Posten zusätzlich automatisch 3-6 passende Tags vor.</p>
+                </fieldset>
+
+                <fieldset class="taxonomy-select">
+                    <legend>Stil</legend>
+                    <div class="style-selects">
+                        <label>Ton:
+                            <select name="tone">
+                                {% for opt in tone_options %}
+                                <option value="{{ opt }}" {% if opt == default_tone %}selected{% endif %}>{{ opt | capitalize }}</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                        <label>Länge:
+                            <select name="length">
+                                {% for opt in length_options %}
+                                <option value="{{ opt }}" {% if opt == default_length %}selected{% endif %}>{{ opt | capitalize }}</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                    </div>
+                </fieldset>
+
+                <div class="publish-options">
+                    <label>
+                        <input type="radio" name="post_status" value="draft" {% if status_default == 'draft' %}checked{% endif %}>
+                        Als Entwurf speichern
+                    </label>
+                    <label>
+                        <input type="radio" name="post_status" value="publish" {% if status_default == 'publish' %}checked{% endif %}>
+                        Direkt veröffentlichen
+                    </label>
+                    <label class="force-repost">
+                        <input type="checkbox" name="force_repost" value="1">
+                        Bereits geposteten Artikel trotzdem erneut posten
+                    </label>
+                    <button type="submit">Ausgewählten Artikel umschreiben &amp; posten</button>
+                </div>
+            </form>
+            {% endif %}
+        {% endif %}
+    </div>
+</body>
+</html>
